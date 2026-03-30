@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -14,7 +15,11 @@ import (
 	"github.com/PatrickSteil/nextbike/server"
 )
 
+var version = "dev"
+
 func main() {
+	fmt.Println("nextbike version:", version)
+
 	log := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
 	database, err := db.Open("nextbike.db")
