@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 )
 
 type Station struct {
@@ -36,7 +36,7 @@ type DB struct {
 }
 
 func Open(path string) (*DB, error) {
-	sqlDB, err := sql.Open("sqlite3", path+"?_journal=WAL&_busy_timeout=5000&_loc=UTC")
+	sqlDB, err := sql.Open("sqlite", path+"?_journal=WAL&_busy_timeout=5000&_loc=UTC")
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
