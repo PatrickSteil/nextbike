@@ -25,13 +25,16 @@ go mod tidy
 
 On first launch the poller fetches immediately, then every 60 seconds. The database file `nextbike.db` is created in the working directory.
 
-## HTTP API
+## HTTP APIs
 
 ```
+GET /cities
+GET /cities/{uid}/stations
+GET /stations
 GET /stations/{uid}
 ```
 
-Returns the latest state of a station. The UID is the Nextbike place UID.
+The last one returns the latest state of a station. The UID is the Nextbike place UID.
 
 ```bash
 curl http://localhost:8080/stations/19153166
