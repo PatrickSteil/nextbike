@@ -26,6 +26,7 @@ func (s *Server) Start(ctx context.Context, addr string) error {
 	mux.HandleFunc("GET /cities/{uid}/stations", s.getStationsByCity)
 	mux.HandleFunc("GET /stations", s.getAllStations)
 	mux.HandleFunc("GET /stations/{uid}", s.getStation)
+	mux.HandleFunc("GET /stations/nearby", s.getNearbyStations)
 
 	srv := &http.Server{Addr: addr, Handler: mux}
 
@@ -97,6 +98,51 @@ func (s *Server) getStation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, station)
+}
+
+func (s *Server) getNearbyStations(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	latStr := q.Get("lat")
+	lonStr := q.Get("lon")
+	radiusStr := q.Get("radius")
+
+	if latStr == "" || lonStr == "" || radiusStr == "" {
+		http.Error(w, "missing required query parameters: lat, lon, radius", http.StatusBadRequest)
+		return
+	}
+
+	lat, err := strconv.ParseFloat(latStr, 64)
+	if err != nil {
+		http.Error(w, "invalid 'lat' parameter: must be a float", http.StatusBadRequest)
+		return
+	}
+
+	lon, err := strconv.ParseFloat(lonStr, 64)
+	if err != nil {
+		http.Error(w, "invalid 'lon' parameter: must be a float", http.StatusBadRequest)
+		return
+	}
+
+	radius, err := strconv.ParseFloat(radiusStr, 64)
+	if err != nil || radius <= 0 {
+		http.Error(w, "invalid 'radius' parameter: must be a positive float", http.StatusBadRequest)
+		return
+	}
+
+	s.log.Info("Serving GET /stations/nearby", "lat", lat, "lon", lon, "radius", radius)
+
+	stations, err := s.db.StationsWithinRadius(r.Context(), lat, lon, radius)
+	if err != nil {
+		s.internalError(w, "stationsWithinRadius", err)
+		return
+	}
+
+	if stations == nil {
+		s.log.Info("No stations found")
+		stations = []db.Station{}
+	}
+
+	writeJSON(w, stations)
 }
 
 func (s *Server) internalError(w http.ResponseWriter, op string, err error) {

@@ -2,7 +2,6 @@ package poller
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"time"
 
@@ -62,18 +61,11 @@ func (p *Poller) tick(ctx context.Context) {
 	}
 	fetchDur := time.Since(fetchStart)
 
-	tx, err := p.db.Begin(ctx)
-	if err != nil {
-		p.log.Error("begin tx failed", "err", err)
-		return
-	}
-
-	writeStart := time.Now()
-	var n int
+	var stations []db.Station
 	for _, country := range resp.Countries {
 		for _, city := range country.Cities {
 			for _, place := range city.Places {
-				if err := p.db.Upsert(ctx, tx, db.Station{
+				stations = append(stations, db.Station{
 					UID:                  place.UID,
 					Name:                 place.Name,
 					CityUID:              city.UID,
@@ -82,24 +74,20 @@ func (p *Poller) tick(ctx context.Context) {
 					Lng:                  place.Lng,
 					BikesAvailableToRent: place.BikesAvailableToRent,
 					UpdatedAt:            fetchStart.UTC(),
-				}); err != nil {
-					_ = tx.Rollback()
-					p.log.Error("upsert failed", "uid", place.UID, "err", err)
-					return
-				}
-				n++
+				})
 			}
 		}
 	}
 
-	if err := tx.Commit(); err != nil {
-		p.log.Error("commit failed", "err", fmt.Errorf("%w", err))
+	writeStart := time.Now()
+	if err := p.db.ReplaceAll(ctx, stations); err != nil {
+		p.log.Error("replace all failed", "err", err)
 		return
 	}
 	writeDur := time.Since(writeStart)
 
-	p.log.Info("poll done",
-		"stations", n,
+	p.log.Info("poll done (hot swapped)",
+		"stations", len(stations),
 		"fetch", fetchDur.Round(time.Millisecond),
 		"write", writeDur.Round(time.Millisecond),
 	)

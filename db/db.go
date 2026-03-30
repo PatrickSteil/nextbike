@@ -4,10 +4,27 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"math"
 	"time"
 
 	_ "modernc.org/sqlite"
 )
+
+const earthRadiusKm = 6371.0
+
+func haversineDistance(lat1, lon1, lat2, lon2 float64) float64 {
+	rad := math.Pi / 180.0
+	dLat := (lat2 - lat1) * rad
+	dLon := (lon2 - lon1) * rad
+
+	a := math.Sin(dLat/2)*math.Sin(dLat/2) +
+		math.Cos(lat1*rad)*math.Cos(lat2*rad)*
+			math.Sin(dLon/2)*math.Sin(dLon/2)
+
+	c := 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
+
+	return earthRadiusKm * c
+}
 
 type Station struct {
 	UID                  int
@@ -33,6 +50,7 @@ type DB struct {
 	allStations *sql.Stmt
 	byCity      *sql.Stmt
 	allCities   *sql.Stmt
+	withinBox   *sql.Stmt
 }
 
 func Open(path string) (*DB, error) {
@@ -41,6 +59,11 @@ func Open(path string) (*DB, error) {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
 	sqlDB.SetMaxOpenConns(1)
+
+	if _, err := sqlDB.Exec(`PRAGMA auto_vacuum = FULL;`); err != nil {
+		sqlDB.Close()
+		return nil, fmt.Errorf("set pragma: %w", err)
+	}
 
 	if err := migrate(sqlDB); err != nil {
 		sqlDB.Close()
@@ -72,6 +95,12 @@ func Open(path string) (*DB, error) {
 		"allCities": `
 			SELECT city_uid, city_name, COUNT(*) AS station_count, SUM(bikes_available_to_rent) AS total_bikes
 			FROM stations GROUP BY city_uid, city_name ORDER BY city_name`,
+		"withinBox": `
+			SELECT s.uid, s.name, s.city_uid, s.city_name, s.lat, s.lng, s.bikes_available_to_rent, s.updated_at
+			FROM stations s
+			JOIN stations_rtree r ON s.uid = r.id
+			WHERE r.min_lat >= ? AND r.max_lat <= ?
+			  AND r.min_lng >= ? AND r.max_lng <= ?`,
 	}
 
 	d := &DB{sql: sqlDB}
@@ -80,6 +109,7 @@ func Open(path string) (*DB, error) {
 	stmts["allStations"] = &d.allStations
 	stmts["byCity"] = &d.byCity
 	stmts["allCities"] = &d.allCities
+	stmts["withinBox"] = &d.withinBox
 
 	for name, ptr := range stmts {
 		*ptr, err = sqlDB.Prepare(queries[name])
@@ -98,6 +128,7 @@ func (d *DB) Close() error {
 	d.allStations.Close()
 	d.byCity.Close()
 	d.allCities.Close()
+	d.withinBox.Close()
 	return d.sql.Close()
 }
 
@@ -184,6 +215,67 @@ func collectStations(rows *sql.Rows) ([]Station, error) {
 	return stations, rows.Err()
 }
 
+func (d *DB) StationsWithinRadius(ctx context.Context, lat, lng float64, radiusKm float64) ([]Station, error) {
+	latDelta := (radiusKm / earthRadiusKm) * (180.0 / math.Pi)
+
+	lngDelta := latDelta / math.Cos(lat*math.Pi/180.0)
+
+	minLat := lat - latDelta
+	maxLat := lat + latDelta
+	minLng := lng - lngDelta
+	maxLng := lng + lngDelta
+
+	rows, err := d.withinBox.QueryContext(ctx, minLat, maxLat, minLng, maxLng)
+	if err != nil {
+		return nil, fmt.Errorf("query within box: %w", err)
+	}
+	defer rows.Close()
+
+	var stations []Station
+	for rows.Next() {
+		var s Station
+		if err := rows.Scan(
+			&s.UID, &s.Name, &s.CityUID, &s.CityName,
+			&s.Lat, &s.Lng, &s.BikesAvailableToRent, &s.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan station: %w", err)
+		}
+
+		if haversineDistance(lat, lng, s.Lat, s.Lng) <= radiusKm {
+			stations = append(stations, s)
+		}
+	}
+
+	return stations, rows.Err()
+}
+
+func (d *DB) ReplaceAll(ctx context.Context, stations []Station) error {
+	tx, err := d.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.ExecContext(ctx, "DELETE FROM stations"); err != nil {
+		return fmt.Errorf("delete old stations: %w", err)
+	}
+
+	stmt := tx.StmtContext(ctx, d.upsert)
+
+	for _, s := range stations {
+		_, err := stmt.ExecContext(ctx,
+			s.UID, s.Name, s.CityUID, s.CityName,
+			s.Lat, s.Lng, s.BikesAvailableToRent,
+			s.UpdatedAt.UTC(),
+		)
+		if err != nil {
+			return fmt.Errorf("insert station %d: %w", s.UID, err)
+		}
+	}
+
+	return tx.Commit()
+}
+
 func migrate(sqlDB *sql.DB) error {
 	_, err := sqlDB.Exec(`
 		CREATE TABLE IF NOT EXISTS stations (
@@ -195,7 +287,37 @@ func migrate(sqlDB *sql.DB) error {
 			lng                     REAL      NOT NULL,
 			bikes_available_to_rent INTEGER   NOT NULL DEFAULT 0,
 			updated_at              TIMESTAMP NOT NULL
-		)
+		);
+
+		-- Create the R*Tree index table
+		CREATE VIRTUAL TABLE IF NOT EXISTS stations_rtree USING rtree(
+			id,
+			min_lat, max_lat,
+			min_lng, max_lng
+		);
+
+		-- Trigger to add a node to the R*Tree on insert
+		CREATE TRIGGER IF NOT EXISTS stations_ai AFTER INSERT ON stations BEGIN
+			INSERT INTO stations_rtree(id, min_lat, max_lat, min_lng, max_lng)
+			VALUES(new.uid, new.lat, new.lat, new.lng, new.lng);
+		END;
+
+		-- Trigger to update the R*Tree on location update
+		CREATE TRIGGER IF NOT EXISTS stations_au AFTER UPDATE ON stations BEGIN
+			UPDATE stations_rtree SET
+				min_lat = new.lat, max_lat = new.lat,
+				min_lng = new.lng, max_lng = new.lng
+			WHERE id = old.uid;
+		END;
+
+		-- Trigger to remove from R*Tree on delete
+		CREATE TRIGGER IF NOT EXISTS stations_ad AFTER DELETE ON stations BEGIN
+			DELETE FROM stations_rtree WHERE id = old.uid;
+		END;
+
+		INSERT INTO stations_rtree (id, min_lat, max_lat, min_lng, max_lng)
+        SELECT uid, lat, lat, lng, lng FROM stations
+        WHERE uid NOT IN (SELECT id FROM stations_rtree);
 	`)
 	return err
 }
