@@ -16,7 +16,7 @@ const baseURL = "https://maps.nextbike.net"
 
 type QueryParams struct {
 	CityUIDs []int    // filter to specific cities; empty = all
-	Domains  []string // e.g. "de", "at"
+	Country  []string // e.g. "de", "at"
 }
 
 type Client struct {
@@ -36,8 +36,8 @@ func (c *Client) Fetch(ctx context.Context, p QueryParams) (*models.Response, er
 	for _, uid := range p.CityUIDs {
 		q.Add("city", strconv.Itoa(uid))
 	}
-	for _, d := range p.Domains {
-		q.Add("domains", d)
+	for _, d := range p.Country {
+		q.Add("country", d)
 	}
 
 	endpoint := fmt.Sprintf("%s/maps/nextbike-official.json?%s", baseURL, q.Encode())

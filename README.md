@@ -2,6 +2,8 @@
 
 Polls the [Nextbike Maps API](https://maps.nextbike.net) every 60 seconds and stores the latest bike availability per station in a local SQLite database. Exposes a small HTTP API for querying stations by UID.
 
+Currently hardcoded to only fetch the Germany stations (see `cmd/nextbike/main.go`).
+
 ## Setup
 
 ```bash
@@ -9,24 +11,6 @@ git clone https://github.com/PatrickSteil/nextbike
 cd nextbike
 go mod tidy
 ```
-
-### Find your city UID
-
-```bash
-curl "https://maps.nextbike.net/maps/nextbike-official.json?list_cities=true&countries=DE" \
-  | jq '.countries[].cities[] | select(.name | test("Heidelberg")) | {uid, name}'
-```
-
-Then uncomment and set `CityUIDs` in `cmd/nextbike/main.go`:
-
-```go
-p := poller.New(poller.Config{
-    CityUIDs: []int{462}, // your city UID
-    Interval: 60 * time.Second,
-}, ...)
-```
-
-Leaving `CityUIDs` empty fetches all cities worldwide (large response).
 
 ## Usage
 

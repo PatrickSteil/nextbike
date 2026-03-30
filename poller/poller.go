@@ -12,7 +12,7 @@ import (
 
 type Config struct {
 	CityUIDs []int
-	Domains  []string
+	Country  []string
 	Interval time.Duration
 }
 
@@ -51,16 +51,16 @@ func (p *Poller) tick(ctx context.Context) {
 	fetchCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
+	fetchStart := time.Now()
 	resp, err := p.client.Fetch(fetchCtx, client.QueryParams{
 		CityUIDs: p.cfg.CityUIDs,
-		Domains:  p.cfg.Domains,
+		Country:  p.cfg.Country,
 	})
 	if err != nil {
 		p.log.Error("fetch failed", "err", err)
 		return
 	}
-
-	now := time.Now().UTC()
+	fetchDur := time.Since(fetchStart)
 
 	tx, err := p.db.Begin(ctx)
 	if err != nil {
@@ -68,6 +68,7 @@ func (p *Poller) tick(ctx context.Context) {
 		return
 	}
 
+	writeStart := time.Now()
 	var n int
 	for _, country := range resp.Countries {
 		for _, city := range country.Cities {
@@ -80,7 +81,7 @@ func (p *Poller) tick(ctx context.Context) {
 					Lat:                  place.Lat,
 					Lng:                  place.Lng,
 					BikesAvailableToRent: place.BikesAvailableToRent,
-					UpdatedAt:            now,
+					UpdatedAt:            fetchStart.UTC(),
 				}); err != nil {
 					_ = tx.Rollback()
 					p.log.Error("upsert failed", "uid", place.UID, "err", err)
@@ -95,6 +96,11 @@ func (p *Poller) tick(ctx context.Context) {
 		p.log.Error("commit failed", "err", fmt.Errorf("%w", err))
 		return
 	}
+	writeDur := time.Since(writeStart)
 
-	p.log.Info("poll done", "stations", n, "at", now.Format(time.RFC3339))
+	p.log.Info("poll done",
+		"stations", n,
+		"fetch", fetchDur.Round(time.Millisecond),
+		"write", writeDur.Round(time.Millisecond),
+	)
 }
