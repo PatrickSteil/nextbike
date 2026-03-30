@@ -42,6 +42,7 @@ func (s *Server) Start(ctx context.Context, addr string) error {
 }
 
 func (s *Server) getCities(w http.ResponseWriter, r *http.Request) {
+	s.log.Info("Serving GET /cities")
 	cities, err := s.db.AllCities(r.Context())
 	if err != nil {
 		s.internalError(w, "allCities", err)
@@ -51,6 +52,7 @@ func (s *Server) getCities(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getAllStations(w http.ResponseWriter, r *http.Request) {
+	s.log.Info("Serving GET /stations")
 	stations, err := s.db.AllStations(r.Context())
 	if err != nil {
 		s.internalError(w, "allStations", err)
@@ -65,6 +67,7 @@ func (s *Server) getStationsByCity(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "uid must be an integer", http.StatusBadRequest)
 		return
 	}
+	s.log.Info("Serving GET /cities/{uid}/stations", "uid", uid)
 	stations, err := s.db.StationsByCity(r.Context(), uid)
 	if err != nil {
 		s.internalError(w, "stationsByCity", err)
@@ -83,6 +86,7 @@ func (s *Server) getStation(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "uid must be an integer", http.StatusBadRequest)
 		return
 	}
+	s.log.Info("Serving GET /stations/{uid}", "uid", uid)
 	station, err := s.db.ByUID(r.Context(), uid)
 	if err != nil {
 		s.internalError(w, "byUID", err)
