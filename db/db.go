@@ -26,7 +26,8 @@ type DB struct {
 }
 
 func Open(path string) (*DB, error) {
-	sqlDB, err := sql.Open("sqlite3", path+"?_journal=WAL&_busy_timeout=5000")
+	// _loc=UTC ensures timestamps are interpreted as UTC when read back
+	sqlDB, err := sql.Open("sqlite3", path+"?_journal=WAL&_busy_timeout=5000&_loc=UTC")
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
@@ -77,7 +78,7 @@ func (d *DB) Upsert(ctx context.Context, tx *sql.Tx, s Station) error {
 	_, err := stmt.ExecContext(ctx,
 		s.UID, s.Name, s.CityUID, s.CityName,
 		s.Lat, s.Lng, s.BikesAvailableToRent,
-		s.UpdatedAt.UTC().Format(time.RFC3339),
+		s.UpdatedAt.UTC(),
 	)
 	return err
 }
@@ -89,11 +90,10 @@ func (d *DB) Begin(ctx context.Context) (*sql.Tx, error) {
 func (d *DB) ByUID(ctx context.Context, uid int) (*Station, error) {
 	row := d.byUID.QueryRowContext(ctx, uid)
 	var s Station
-	var updatedAt string
 	err := row.Scan(
 		&s.UID, &s.Name, &s.CityUID, &s.CityName,
 		&s.Lat, &s.Lng, &s.BikesAvailableToRent,
-		&updatedAt,
+		&s.UpdatedAt,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -101,7 +101,6 @@ func (d *DB) ByUID(ctx context.Context, uid int) (*Station, error) {
 	if err != nil {
 		return nil, fmt.Errorf("scan station: %w", err)
 	}
-	s.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt)
 	return &s, nil
 }
 
@@ -115,7 +114,7 @@ func migrate(sqlDB *sql.DB) error {
 			lat                     REAL    NOT NULL,
 			lng                     REAL    NOT NULL,
 			bikes_available_to_rent INTEGER NOT NULL DEFAULT 0,
-			updated_at              TEXT    NOT NULL
+			updated_at              TIMESTAMP NOT NULL
 		)
 	`)
 	return err
