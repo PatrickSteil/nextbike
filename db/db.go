@@ -48,6 +48,7 @@ type DB struct {
 	upsert      *sql.Stmt
 	byUID       *sql.Stmt
 	allStations *sql.Stmt
+	updateLive  *sql.Stmt
 	byCity      *sql.Stmt
 	allCities   *sql.Stmt
 	withinBox   *sql.Stmt
@@ -95,6 +96,13 @@ func Open(path string) (*DB, error) {
 		"allCities": `
 			SELECT city_uid, city_name, COUNT(*) AS station_count, SUM(bikes_available_to_rent) AS total_bikes
 			FROM stations GROUP BY city_uid, city_name ORDER BY city_name`,
+		"updateLive": `
+    INSERT INTO stations (uid, name, city_uid, city_name, lat, lng, bikes_available_to_rent, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(uid) DO UPDATE SET
+        bikes_available_to_rent = excluded.bikes_available_to_rent,
+        updated_at              = excluded.updated_at`,
+
 		"withinBox": `
 			SELECT s.uid, s.name, s.city_uid, s.city_name, s.lat, s.lng, s.bikes_available_to_rent, s.updated_at
 			FROM stations s
@@ -107,6 +115,7 @@ func Open(path string) (*DB, error) {
 	stmts["upsert"] = &d.upsert
 	stmts["byUID"] = &d.byUID
 	stmts["allStations"] = &d.allStations
+	stmts["updateLive"] = &d.updateLive
 	stmts["byCity"] = &d.byCity
 	stmts["allCities"] = &d.allCities
 	stmts["withinBox"] = &d.withinBox
@@ -126,6 +135,7 @@ func (d *DB) Close() error {
 	d.upsert.Close()
 	d.byUID.Close()
 	d.allStations.Close()
+	d.updateLive.Close()
 	d.byCity.Close()
 	d.allCities.Close()
 	d.withinBox.Close()
@@ -249,19 +259,14 @@ func (d *DB) StationsWithinRadius(ctx context.Context, lat, lng float64, radiusK
 	return stations, rows.Err()
 }
 
-func (d *DB) ReplaceAll(ctx context.Context, stations []Station) error {
+func (d *DB) UpsertLive(ctx context.Context, stations []Station) error {
 	tx, err := d.sql.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 
-	if _, err := tx.ExecContext(ctx, "DELETE FROM stations"); err != nil {
-		return fmt.Errorf("delete old stations: %w", err)
-	}
-
-	stmt := tx.StmtContext(ctx, d.upsert)
-
+	stmt := tx.StmtContext(ctx, d.updateLive)
 	for _, s := range stations {
 		_, err := stmt.ExecContext(ctx,
 			s.UID, s.Name, s.CityUID, s.CityName,
@@ -269,10 +274,9 @@ func (d *DB) ReplaceAll(ctx context.Context, stations []Station) error {
 			s.UpdatedAt.UTC(),
 		)
 		if err != nil {
-			return fmt.Errorf("insert station %d: %w", s.UID, err)
+			return fmt.Errorf("upsert station %d: %w", s.UID, err)
 		}
 	}
-
 	return tx.Commit()
 }
 

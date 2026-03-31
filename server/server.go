@@ -25,10 +25,10 @@ func (s *Server) Start(ctx context.Context, addr string) error {
 	mux.HandleFunc("GET /cities", s.getCities)
 	mux.HandleFunc("GET /cities/{uid}/stations", s.getStationsByCity)
 	mux.HandleFunc("GET /stations", s.getAllStations)
-	mux.HandleFunc("GET /stations/{uid}", s.getStation)
 	mux.HandleFunc("GET /stations/nearby", s.getNearbyStations)
+	mux.HandleFunc("GET /stations/{uid}", s.getStation)
 
-	srv := &http.Server{Addr: addr, Handler: mux}
+	srv := &http.Server{Addr: addr, Handler: logMiddleware(s.log, mux)}
 
 	go func() {
 		<-ctx.Done()
@@ -43,7 +43,6 @@ func (s *Server) Start(ctx context.Context, addr string) error {
 }
 
 func (s *Server) getCities(w http.ResponseWriter, r *http.Request) {
-	s.log.Info("Serving GET /cities")
 	cities, err := s.db.AllCities(r.Context())
 	if err != nil {
 		s.internalError(w, "allCities", err)
@@ -53,7 +52,6 @@ func (s *Server) getCities(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getAllStations(w http.ResponseWriter, r *http.Request) {
-	s.log.Info("Serving GET /stations")
 	stations, err := s.db.AllStations(r.Context())
 	if err != nil {
 		s.internalError(w, "allStations", err)
@@ -68,7 +66,6 @@ func (s *Server) getStationsByCity(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "uid must be an integer", http.StatusBadRequest)
 		return
 	}
-	s.log.Info("Serving GET /cities/{uid}/stations", "uid", uid)
 	stations, err := s.db.StationsByCity(r.Context(), uid)
 	if err != nil {
 		s.internalError(w, "stationsByCity", err)
@@ -87,7 +84,6 @@ func (s *Server) getStation(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "uid must be an integer", http.StatusBadRequest)
 		return
 	}
-	s.log.Info("Serving GET /stations/{uid}", "uid", uid)
 	station, err := s.db.ByUID(r.Context(), uid)
 	if err != nil {
 		s.internalError(w, "byUID", err)
@@ -129,8 +125,6 @@ func (s *Server) getNearbyStations(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.log.Info("Serving GET /stations/nearby", "lat", lat, "lon", lon, "radius", radius)
-
 	stations, err := s.db.StationsWithinRadius(r.Context(), lat, lon, radius)
 	if err != nil {
 		s.internalError(w, "stationsWithinRadius", err)
@@ -138,7 +132,6 @@ func (s *Server) getNearbyStations(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if stations == nil {
-		s.log.Info("No stations found")
 		stations = []db.Station{}
 	}
 
@@ -150,7 +143,12 @@ func (s *Server) internalError(w http.ResponseWriter, op string, err error) {
 	http.Error(w, "internal error", http.StatusInternalServerError)
 }
 
-func writeJSON(w http.ResponseWriter, v any) {
+func writeJSON(w http.ResponseWriter, v any) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(v)
+	w.Write(b)
+	return nil
 }

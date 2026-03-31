@@ -80,13 +80,13 @@ func (p *Poller) tick(ctx context.Context) {
 	}
 
 	writeStart := time.Now()
-	if err := p.db.ReplaceAll(ctx, stations); err != nil {
-		p.log.Error("replace all failed", "err", err)
+	if err := p.db.UpsertLive(ctx, stations); err != nil {
+		p.log.Error("upsert live failed", "err", err)
 		return
 	}
 	writeDur := time.Since(writeStart)
 
-	p.log.Info("poll done (hot swapped)",
+	p.log.Info("poll done",
 		"stations", len(stations),
 		"fetch", fetchDur.Round(time.Millisecond),
 		"write", writeDur.Round(time.Millisecond),
