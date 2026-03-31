@@ -52,6 +52,7 @@ type DB struct {
 	byCity      *sql.Stmt
 	allCities   *sql.Stmt
 	withinBox   *sql.Stmt
+	deleteStale *sql.Stmt
 }
 
 func Open(path string) (*DB, error) {
@@ -109,6 +110,7 @@ func Open(path string) (*DB, error) {
 			JOIN stations_rtree r ON s.uid = r.id
 			WHERE r.min_lat >= ? AND r.max_lat <= ?
 			  AND r.min_lng >= ? AND r.max_lng <= ?`,
+		"deleteStale": `DELETE FROM stations WHERE updated_at < ?`,
 	}
 
 	d := &DB{sql: sqlDB}
@@ -119,6 +121,7 @@ func Open(path string) (*DB, error) {
 	stmts["byCity"] = &d.byCity
 	stmts["allCities"] = &d.allCities
 	stmts["withinBox"] = &d.withinBox
+	stmts["deleteStale"] = &d.deleteStale
 
 	for name, ptr := range stmts {
 		*ptr, err = sqlDB.Prepare(queries[name])
@@ -139,6 +142,7 @@ func (d *DB) Close() error {
 	d.byCity.Close()
 	d.allCities.Close()
 	d.withinBox.Close()
+	d.deleteStale.Close()
 	return d.sql.Close()
 }
 
@@ -324,4 +328,13 @@ func migrate(sqlDB *sql.DB) error {
         WHERE uid NOT IN (SELECT id FROM stations_rtree);
 	`)
 	return err
+}
+
+func (d *DB) DeleteStale(ctx context.Context, olderThan time.Duration) (int64, error) {
+	cutoff := time.Now().UTC().Add(-olderThan)
+	res, err := d.deleteStale.ExecContext(ctx, cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("delete stale: %w", err)
+	}
+	return res.RowsAffected()
 }

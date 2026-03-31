@@ -9,6 +9,11 @@ import (
 	"github.com/PatrickSteil/nextbike/db"
 )
 
+const (
+	cleanupInterval = 5 * time.Minute
+	staleAfter      = 10 * time.Minute
+)
+
 type Config struct {
 	CityUIDs []int
 	Country  []string
@@ -33,16 +38,35 @@ func (p *Poller) Run(ctx context.Context) {
 	p.log.Info("poller started", "interval", p.cfg.Interval)
 	p.tick(ctx)
 
-	t := time.NewTicker(p.cfg.Interval)
-	defer t.Stop()
+	pollTicker := time.NewTicker(p.cfg.Interval)
+	cleanupTicker := time.NewTicker(cleanupInterval)
+	defer pollTicker.Stop()
+	defer cleanupTicker.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
 			p.log.Info("poller stopped")
 			return
-		case <-t.C:
+		case <-pollTicker.C:
 			p.tick(ctx)
+		case <-cleanupTicker.C:
+			p.cleanup(ctx)
 		}
+	}
+}
+
+func (p *Poller) cleanup(ctx context.Context) {
+	cleanCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	n, err := p.db.DeleteStale(cleanCtx, staleAfter)
+	if err != nil {
+		p.log.Error("cleanup failed", "err", err)
+		return
+	}
+	if n > 0 {
+		p.log.Info("cleanup removed stale stations", "removed", n)
 	}
 }
 
